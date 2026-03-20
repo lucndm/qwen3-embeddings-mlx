@@ -16,16 +16,18 @@ class OpenAIEmbeddingRequest(BaseModel):
     model: str = Field(
         ..., description="Model to use for embedding (OpenAI name or Qwen name/alias)"
     )
-    encoding_format: str = Field(
+    encoding_format: Optional[str] = Field(
         default="float", description="Format for embeddings (only 'float' supported)"
     )
     dimensions: Optional[int] = Field(
         default=None, description="Truncate embeddings to this dimension (optional)"
     )
 
-    @field_validator("encoding_format")
+    @field_validator("encoding_format", mode="before")
     @classmethod
     def validate_encoding_format(cls, v):
+        if v is None:
+            return "float"
         if v != "float":
             raise ValueError("Only 'float' encoding_format is supported")
         return v
