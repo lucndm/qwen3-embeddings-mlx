@@ -449,7 +449,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Qwen3 Embedding Server",
     description="High-performance text embedding service using MLX on Apple Silicon",
-    version="1.2.0",
+    version="2.0.0",  # Major version bump for OpenAI-compatible API
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
