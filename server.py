@@ -27,6 +27,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 import uvicorn
 
+# OpenTelemetry imports
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.resources import Resource
+
 # OpenAI compatibility imports
 from models import (
     OpenAIEmbeddingRequest,
@@ -86,6 +93,60 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 
 # Initialize logger
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+
+
+# OpenTelemetry setup
+def setup_telemetry():
+    """Setup OpenTelemetry metrics with OTLP exporter"""
+    service_name = os.getenv("OTEL_SERVICE_NAME", "qwen3-embedding-server")
+    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
+    resource = Resource.create({"service.name": service_name})
+
+    exporter = OTLPMetricExporter(endpoint=f"{otlp_endpoint}/v1/metrics")
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=10000)
+
+    provider = MeterProvider(resource=resource, metric_readers=[reader])
+    metrics.set_meter_provider(provider)
+
+    return metrics.get_meter(service_name)
+
+
+# Initialize meter (optional - gracefully handle if OTEL not configured)
+meter = None
+try:
+    meter = setup_telemetry()
+    logger.info("OpenTelemetry metrics initialized")
+except Exception as e:
+    logger.warning(f"OpenTelemetry not configured, metrics disabled: {e}")
+
+# Metrics
+if meter:
+    embedding_counter = meter.create_counter(
+        "embedding_requests_total",
+        description="Total number of embedding requests",
+        unit="1",
+    )
+    embedding_latency = meter.create_histogram(
+        "embedding_latency_ms",
+        description="Embedding request latency in milliseconds",
+        unit="ms",
+    )
+    tokens_counter = meter.create_counter(
+        "tokens_total",
+        description="Total tokens processed",
+        unit="1",
+    )
+    error_counter = meter.create_counter(
+        "embedding_errors_total",
+        description="Total embedding errors",
+        unit="1",
+    )
+else:
+    embedding_counter = None
+    embedding_latency = None
+    tokens_counter = None
+    error_counter = None
 
 
 # Configuration
@@ -569,6 +630,14 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
         processing_time = (time.time() - start_time) * 1000
         logger.info(f"Generated {len(data)} embeddings in {processing_time:.2f}ms")
 
+        # Record metrics
+        if embedding_counter:
+            embedding_counter.add(1, {"model": request.model})
+        if embedding_latency:
+            embedding_latency.record(processing_time, {"model": request.model})
+        if tokens_counter:
+            tokens_counter.add(total_tokens, {"model": request.model})
+
         return OpenAIEmbeddingResponse(
             object="list",
             data=data,
@@ -578,6 +647,8 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
+        if error_counter:
+            error_counter.add(1, {"model": request.model, "error_type": "validation"})
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=OpenAIErrorResponse(
@@ -586,6 +657,8 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
         )
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}", exc_info=True)
+        if error_counter:
+            error_counter.add(1, {"model": request.model, "error_type": "server_error"})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=OpenAIErrorResponse(
