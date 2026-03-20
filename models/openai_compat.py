@@ -28,8 +28,8 @@ class OpenAIEmbeddingRequest(BaseModel):
     def validate_encoding_format(cls, v):
         if v is None:
             return "float"
-        if v != "float":
-            raise ValueError("Only 'float' encoding_format is supported")
+        if v not in ("float", "base64"):
+            raise ValueError("encoding_format must be 'float' or 'base64'")
         return v
 
     @field_validator("input")
@@ -53,7 +53,9 @@ class EmbeddingObject(BaseModel):
     """Single embedding object in response"""
 
     object: str = Field(default="embedding", description="Object type")
-    embedding: List[float] = Field(..., description="Embedding vector")
+    embedding: Union[List[float], str] = Field(
+        ..., description="Embedding vector (float array or base64 string)"
+    )
     index: int = Field(..., description="Index in the input array")
 
 

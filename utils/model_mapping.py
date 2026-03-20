@@ -3,7 +3,9 @@ Model mapping utilities for OpenAI-to-Qwen compatibility.
 Maps OpenAI model names to Qwen equivalents and provides helper functions.
 """
 
-from typing import List, Any
+import base64
+import struct
+from typing import List, Any, Union
 
 
 # Mapping from OpenAI model names to Qwen aliases
@@ -94,3 +96,21 @@ def count_tokens_batch(texts: List[str], tokenizer: Any) -> int:
         Total token count
     """
     return sum(count_tokens(text, tokenizer) for text in texts)
+
+
+def encode_embedding_base64(embedding: List[float]) -> str:
+    """
+    Encode embedding as base64 (float32 little-endian).
+
+    This matches OpenAI's base64 encoding format for embeddings,
+    which reduces payload size by ~50% compared to JSON float arrays.
+
+    Args:
+        embedding: List of float values
+
+    Returns:
+        Base64-encoded string
+    """
+    # Pack floats as little-endian float32 bytes
+    packed = struct.pack(f"<{len(embedding)}f", *embedding)
+    return base64.b64encode(packed).decode("ascii")

@@ -43,7 +43,12 @@ from models import (
     OpenAIError,
     OpenAIErrorResponse,
 )
-from utils import resolve_model, truncate_embedding, count_tokens_batch
+from utils import (
+    resolve_model,
+    truncate_embedding,
+    count_tokens_batch,
+    encode_embedding_base64,
+)
 
 # Constants
 DEFAULT_MODEL = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
@@ -623,8 +628,14 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
             if request.dimensions:
                 emb_list = truncate_embedding(emb_list, request.dimensions)
 
+            # Encode based on format
+            if request.encoding_format == "base64":
+                embedding_data = encode_embedding_base64(emb_list)
+            else:
+                embedding_data = emb_list
+
             data.append(
-                EmbeddingObject(object="embedding", embedding=emb_list, index=i)
+                EmbeddingObject(object="embedding", embedding=embedding_data, index=i)
             )
 
         processing_time = (time.time() - start_time) * 1000
