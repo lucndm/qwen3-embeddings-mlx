@@ -1,24 +1,23 @@
 # Qwen3 Embeddings Server for Mac
 
-**Lightning-fast text embeddings on your Mac.** No cloud, no GPU needed – just Apple Silicon magic. 🚀
+**OpenAI-compatible text embeddings on your Mac.** Drop-in replacement for OpenAI embeddings API. Works with LiteLLM, LangChain, and more. 🚀
 
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![0.6B Speed](https://img.shields.io/badge/0.6B-44K_tokens/sec-green)
 ![4B Speed](https://img.shields.io/badge/4B-18K_tokens/sec-blue)
 ![8B Speed](https://img.shields.io/badge/8B-11K_tokens/sec-purple)
 ![Platform](https://img.shields.io/badge/Platform-Apple_Silicon-black)
 
-## ✨ What is this?
+## ✨ Features
 
-A simple, fast API server that runs state-of-the-art text embedding models locally on your Mac. Perfect for:
+- **OpenAI-Compatible API** - Drop-in replacement for `text-embedding-3-*` models
+- **LiteLLM Integration** - Works seamlessly with LiteLLM proxy
+- **3 Model Sizes** - Small (0.6B), Medium (4B), Large (8B)
+- **Dimension Truncation** - Reduce embedding size on the fly
+- **OpenTelemetry Metrics** - Built-in observability support
+- **Apple Silicon Optimized** - Leverages MLX framework for M1/M2/M3/M4 chips
 
-- 🔍 Semantic search
-- 🤖 RAG applications
-- 📊 Document clustering
-- 🎯 Similarity matching
-
-**Performance**: Process 44,000+ tokens/second with the small model, or get higher quality with larger models.
-
-## 🏃 Quick Start (2 minutes)
+## 🏃 Quick Start
 
 ### Requirements
 
@@ -29,357 +28,311 @@ A simple, fast API server that runs state-of-the-art text embedding models local
 ### Install & Run
 
 ```bash
-# Clone and enter directory
-git clone https://github.com/yourusername/qwen3-embeddings.git
-cd qwen3-embeddings
+# Clone
+git clone https://github.com/lucndm/qwen3-embeddings-mlx.git
+cd qwen3-embeddings-mlx
 
-# Install (one-time, ~30 seconds)
+# Install
 pip install -r requirements.txt
-# Or: make install
 
-# Run! 🎉
+# Run
 python server.py
-# Or: make run
 ```
 
-That's it! The server is now running at `http://localhost:8000`
+Server runs at `http://localhost:8000`
 
-💡 **Tip**: Use `make help` to see all available shortcuts!
-
-On first run, it will download the model (~900MB) which takes about a minute.
-
-### Test it works
+### Test
 
 ```bash
-# Generate an embedding
-curl -X POST http://localhost:8000/embed \
+curl -X POST http://localhost:8000/v1/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world"}'
+  -d '{"input": "Hello world", "model": "text-embedding-3-small"}'
 ```
 
-## 🎮 Choose Your Model
+## 🔌 LiteLLM Integration
 
-Three models available, from fast to powerful:
+This server is fully compatible with LiteLLM. Add to your `litellm_config.yaml`:
 
-| Model               | Speed            | Quality  | Memory | Use When             |
-| ------------------- | ---------------- | -------- | ------ | -------------------- |
-| **Small** (default) | ⚡⚡⚡ 44K tok/s | ⭐⭐     | 900MB  | Speed matters most   |
-| **Medium**          | ⚡⚡ 18K tok/s   | ⭐⭐⭐   | 2.5GB  | **Best balance** ✨  |
-| **Large**           | ⚡ 11K tok/s     | ⭐⭐⭐⭐ | 4.5GB  | Quality matters most |
+```yaml
+model_list:
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_base: http://localhost:8000/v1
+      api_key: dummy
 
-Use different models per request:
+  - model_name: text-embedding-3-medium
+    litellm_params:
+      model: openai/text-embedding-3-medium
+      api_base: http://localhost:8000/v1
+      api_key: dummy
+
+  - model_name: text-embedding-3-large
+    litellm_params:
+      model: openai/text-embedding-3-large
+      api_base: http://localhost:8000/v1
+      api_key: dummy
+```
+
+Then use with any LiteLLM-compatible client:
 
 ```python
-# Python example
-import requests
+from litellm import embedding
 
-# Fast model for high-volume
-requests.post("http://localhost:8000/embed",
-    json={"text": "Quick search", "model": "small"})
-
-# Quality model for important documents
-requests.post("http://localhost:8000/embed",
-    json={"text": "Important document", "model": "large"})
+response = embedding(
+    model="text-embedding-3-small",
+    input=["Hello world", "Test embedding"],
+)
 ```
 
 ## 📖 API Reference
 
-**Interactive docs**: Visit http://localhost:8000/docs when server is running
+### POST /v1/embeddings
 
-### Core Endpoints
+OpenAI-compatible embeddings endpoint.
 
-#### Generate Single Embedding
+**Request:**
 
-```bash
-POST /embed
+```json
 {
-  "text": "Your text here",
-  "model": "small|medium|large"  # optional
+  "input": "string or array of strings",
+  "model": "text-embedding-3-small",
+  "encoding_format": "float",
+  "dimensions": 512
 }
 ```
 
-#### Generate Multiple Embeddings
+**Response:**
 
-```bash
-POST /embed_batch
+```json
 {
-  "texts": ["Text 1", "Text 2", "Text 3"],
-  "model": "small|medium|large"  # optional
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.1, 0.2, ...],
+      "index": 0
+    }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": {
+    "prompt_tokens": 3,
+    "total_tokens": 3
+  }
 }
 ```
 
-#### List Available Models
+### Model Mapping
 
-```bash
-GET /models
+| OpenAI Model | Qwen Model | Dimensions | Speed |
+|--------------|------------|------------|-------|
+| `text-embedding-3-small` | Qwen3 0.6B | 1024 | ⚡⚡⚡ 44K tok/s |
+| `text-embedding-3-medium` | Qwen3 4B | 2560 | ⚡⚡ 18K tok/s |
+| `text-embedding-3-large` | Qwen3 8B | 4096 | ⚡ 11K tok/s |
+| `text-embedding-ada-002` | Qwen3 0.6B | 1024 | ⚡⚡⚡ |
+
+You can also use Qwen names directly: `small`, `medium`, `large`
+
+### Other Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `GET /models` | List available models |
+| `GET /metrics` | Server metrics |
+| `GET /` | API info |
+
+## 💻 Usage Examples
+
+### Python (OpenAI SDK)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="dummy"  # Required but unused
+)
+
+response = client.embeddings.create(
+    model="text-embedding-3-small",
+    input="Hello world",
+    dimensions=512  # Optional: truncate to 512 dims
+)
+
+embedding = response.data[0].embedding
+print(f"Dimensions: {len(embedding)}")  # 512
 ```
 
-#### Health Check
-
-```bash
-GET /health
-```
-
-## 💻 Client Examples
-
-### Python
+### Python (requests)
 
 ```python
 import requests
-import numpy as np
 
-def get_embedding(text, model="medium"):
-    response = requests.post(
-        "http://localhost:8000/embed",
-        json={"text": text, "model": model}
-    )
-    return np.array(response.json()["embedding"])
+response = requests.post(
+    "http://localhost:8000/v1/embeddings",
+    json={
+        "input": ["Hello", "World"],
+        "model": "text-embedding-3-medium"
+    }
+)
 
-# Use it
-embedding = get_embedding("Machine learning is amazing")
-print(f"Shape: {embedding.shape}")  # (2560,) for medium model
+data = response.json()
+for item in data["data"]:
+    print(f"Index {item['index']}: {len(item['embedding'])} dims")
+```
+
+### LangChain
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    openai_api_base="http://localhost:8000/v1",
+    openai_api_key="dummy"
+)
+
+vector = embeddings.embed_query("Hello world")
 ```
 
 ### JavaScript
 
 ```javascript
-async function getEmbedding(text, model = "medium") {
-  const response = await fetch("http://localhost:8000/embed", {
-    method: "POST",
-    headers: { "Content-Type": application/json" },
-    body: JSON.stringify({ text, model })
-  });
-  const data = await response.json();
-  return data.embedding;
-}
+const response = await fetch("http://localhost:8000/v1/embeddings", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    input: "Hello world",
+    model: "text-embedding-3-small"
+  })
+});
 
-// Use it
-const embedding = await getEmbedding("Hello world");
-console.log(`Dimensions: ${embedding.length}`);
+const data = await response.json();
+console.log(`Dimensions: ${data.data[0].embedding.length}`);
 ```
 
-### Semantic Search Example
-
-```python
-from sklearn.metrics.pairwise import cosine_similarity
-
-# Your documents
-docs = [
-    "Machine learning is a subset of AI",
-    "Python is a programming language",
-    "Neural networks are inspired by the brain"
-]
-
-# Get embeddings for all docs
-doc_embeddings = requests.post(
-    "http://localhost:8000/embed_batch",
-    json={"texts": docs}
-).json()["embeddings"]
-
-# Search
-query = "artificial intelligence"
-query_embedding = requests.post(
-    "http://localhost:8000/embed",
-    json={"text": query}
-).json()["embedding"]
-
-# Find most similar
-similarities = cosine_similarity([query_embedding], doc_embeddings)[0]
-best_match = docs[similarities.argmax()]
-print(f"Best match: {best_match}")
-```
-
-## 🛠️ Advanced Usage
-
-### Convenient Make Commands
-
-The project includes a `Makefile` with helpful shortcuts:
+### cURL
 
 ```bash
-# Development
-make run              # Start the server
-make dev              # Run in development mode with auto-reload
-make test             # Run API tests
-make clean            # Remove cache and temp files
+# Single embedding
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Hello world", "model": "text-embedding-3-small"}'
 
-# Benchmarking
-make benchmark        # Quick benchmark (all models)
-make benchmark-full   # Comprehensive benchmark (100 iterations)
-make benchmark-small  # Test just the 0.6B model
-make benchmark-medium # Test just the 4B model
-make benchmark-large  # Test just the 8B model
-make benchmark-stress # Stress test with large batches
-make benchmark-extreme # EXTREME test (warning: intensive!)
+# Batch embeddings
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"input": ["Hello", "World"], "model": "text-embedding-3-medium"}'
 
-# Utilities
-make health           # Check if server is running
-make visualize        # Generate embeddings for TensorFlow Projector
-make lint             # Run code linting
-make format           # Format code with black
-make install          # Install dependencies
-make install-dev      # Install dev dependencies
-
-# See all commands
-make help             # Show all available commands
+# With dimension truncation
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Hello world", "model": "text-embedding-3-small", "dimensions": 256}'
 ```
 
-### Configuration
+## 📊 OpenTelemetry Metrics
 
-Set environment variables to customize:
+Built-in OTLP metrics support for observability:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `embedding_requests_total` | Counter | Total embedding requests |
+| `embedding_latency_ms` | Histogram | Request latency (ms) |
+| `tokens_total` | Counter | Total tokens processed |
+| `embedding_errors_total` | Counter | Total errors |
+
+**Configuration:**
 
 ```bash
-# Use a specific model by default
-MODEL_NAME=mlx-community/Qwen3-Embedding-4B-4bit-DWQ python server.py
-
-# Change port
-PORT=8080 python server.py
-
-# Development mode with auto-reload
-DEV_MODE=true python server.py
-
-# Increase batch size limit
-MAX_BATCH_SIZE=128 python server.py
+OTEL_SERVICE_NAME=qwen3-embedding-server \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+python server.py
 ```
 
-### Performance Tuning
+Install OTEL dependencies:
 
 ```bash
-# Run benchmarks
-make benchmark
-
-# See what models are loaded
-curl http://localhost:8000/models
-
-# Check performance metrics
-curl http://localhost:8000/metrics
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 ```
 
-### Production Deployment
+## ⚙️ Configuration
 
-For production, use a process manager:
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_NAME` | Qwen3-0.6B | Default model |
+| `PORT` | 8000 | Server port |
+| `HOST` | 0.0.0.0 | Server host |
+| `MAX_BATCH_SIZE` | 1024 | Max texts per batch |
+| `MAX_TEXT_LENGTH` | 8192 | Max tokens per text |
+| `LOG_LEVEL` | INFO | Logging level |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | - | OTLP collector endpoint |
+
+## 🛠️ Make Commands
 
 ```bash
-# Install PM2
-npm install -g pm2
-
-# Start server
-pm2 start server.py --interpreter python3 --name embeddings
-
-# Auto-start on boot
-pm2 startup
-pm2 save
+make run          # Start server
+make dev          # Development mode with auto-reload
+make test         # Run tests
+make benchmark    # Performance benchmark
+make health       # Health check
+make help         # Show all commands
 ```
 
-Or use the included systemd service file for Linux servers.
+## 📈 Performance
 
-## 📊 Performance
+Benchmarks from M2 Max (32GB):
 
-Real-world benchmarks from a 16" MacBook Pro (2023) with M2 Max chip and 32GB RAM:
-
-| Operation           | Performance       |
-| ------------------- | ----------------- |
-| Single embedding    | 1-3ms             |
-| Batch (32 texts)    | 44,000 tokens/sec |
-| Concurrent requests | 200+ req/sec      |
-| Cache speedup       | 13x faster        |
-
-The medium model offers the best quality/speed balance with 0.65 semantic coherence score.
-
-_Performance scales with Apple Silicon generation - expect even better results on M3/M4 chips!_
-
-## 🎯 Use Cases
-
-### RAG (Retrieval Augmented Generation)
-
-```python
-# 1. Embed your documents
-embeddings = embed_batch(documents)
-store_in_vector_db(embeddings)
-
-# 2. Embed user query
-query_embedding = embed(user_question)
-
-# 3. Find relevant docs
-relevant_docs = vector_db.search(query_embedding, top_k=5)
-
-# 4. Pass to LLM
-llm_response = llm.generate(user_question, context=relevant_docs)
-```
-
-### Semantic Deduplication
-
-```python
-# Find duplicate content
-embeddings = embed_batch(articles)
-similarity_matrix = cosine_similarity(embeddings)
-duplicates = np.where(similarity_matrix > 0.95)
-```
-
-### Content Recommendation
-
-```python
-# Find similar items
-user_liked_embedding = embed(user_liked_item)
-all_embeddings = embed_batch(all_items)
-similarities = cosine_similarity([user_liked_embedding], all_embeddings)
-recommendations = all_items[similarities.argsort()[-10:]]
-```
-
-## 🐛 Troubleshooting
-
-| Issue                   | Solution                                        |
-| ----------------------- | ----------------------------------------------- |
-| "Out of memory"         | Use smaller model or reduce batch size          |
-| "Slow on first request" | Normal - model warming up. Keep server running. |
-| "Can't connect"         | Check firewall, ensure port 8000 is free        |
-| "Module not found"      | Run `pip install -r requirements.txt` again     |
+| Model | Throughput | Latency | Memory |
+|-------|------------|---------|--------|
+| 0.6B (small) | 44K tok/s | ~1.3ms | 900MB |
+| 4B (medium) | 18K tok/s | ~3-5ms | 2.5GB |
+| 8B (large) | 11K tok/s | ~8-12ms | 4.5GB |
 
 ## 🚀 Why Use This?
 
-- **Privacy**: Your data never leaves your machine
-- **Speed**: Faster than cloud APIs (no network latency)
-- **Cost**: Free after initial setup (no API fees)
-- **Reliability**: No internet required, no rate limits
-- **Quality**: State-of-the-art Qwen3 models with 4-bit quantization
+- **Drop-in Replacement** - Works with existing OpenAI/LiteLLM code
+- **Privacy** - Data never leaves your machine
+- **Speed** - No network latency, local inference
+- **Cost** - Free after setup, no API fees
+- **Quality** - State-of-the-art Qwen3 models
 
-## 📦 What's Included
+## 📦 Project Structure
 
 ```
-qwen3-embeddings/
-├── server.py           # The entire server (one file!)
-├── requirements.txt    # Dependencies
-├── Makefile           # Convenience commands
-├── tests/             # Benchmarks and tests
-│   ├── test_api.py    # API tests
-│   └── benchmark.py   # Performance benchmarks
-└── examples/          # Usage examples
-    └── visualize_embeddings.py  # Embedding visualization
+qwen3-embeddings-mlx/
+├── server.py              # Main FastAPI server
+├── models/
+│   ├── __init__.py
+│   └── openai_compat.py   # OpenAI-compatible Pydantic models
+├── utils/
+│   ├── __init__.py
+│   └── model_mapping.py   # OpenAI -> Qwen model mapping
+├── tests/
+│   ├── test_api.py        # API tests
+│   └── benchmark.py       # Performance benchmarks
+└── examples/              # Usage examples
 ```
 
 ## 🤝 Contributing
 
-Contributions welcome! This is a simple, focused project:
-
 1. Fork the repo
-2. Create your feature branch
-3. Make your changes
-4. Run tests: `make test`
-5. Submit a PR
+2. Create feature branch
+3. Run tests: `make test`
+4. Submit PR
 
 ## 📄 License
 
-MIT License - use it however you want!
+MIT License
 
 ## 🙏 Credits
 
-Built with:
-
 - [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework
-- [Qwen](https://github.com/QwenLM/Qwen) - The embedding models
-- [FastAPI](https://fastapi.tiangolo.com/) - The web framework
+- [Qwen](https://github.com/QwenLM/Qwen) - Embedding models
+- [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 
 ---
 
-**Questions?** Open an issue on GitHub or check the [interactive docs](http://localhost:8000/docs).
-
-**Ready to start?** Just run `python server.py` 🎉
+**Ready to start?** `python server.py` 🎉
