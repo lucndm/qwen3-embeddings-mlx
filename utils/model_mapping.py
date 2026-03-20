@@ -10,6 +10,7 @@ from typing import List, Any
 MODEL_MAPPING = {
     # OpenAI embedding models -> Qwen equivalents
     "text-embedding-3-small": "small",
+    "text-embedding-3-medium": "medium",
     "text-embedding-3-large": "large",
     "text-embedding-ada-002": "small",
     "text-embedding-v1": "small",
