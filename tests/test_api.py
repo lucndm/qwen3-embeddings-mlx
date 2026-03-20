@@ -57,8 +57,8 @@ class TestClient:
         assert "status" in data
         assert "model_status" in data
         assert "embedding_dim" in data
-        # Default model should be small (1024 dim)
-        assert data["embedding_dim"] == 1024
+        # Default model should be medium (2560 dim)
+        assert data["embedding_dim"] == 2560
 
         return data
 

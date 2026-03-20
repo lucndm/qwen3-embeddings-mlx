@@ -51,17 +51,17 @@ from utils import (
 )
 
 # Constants
-DEFAULT_MODEL = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+DEFAULT_MODEL = "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
 
 # Available models configuration
 AVAILABLE_MODELS = {
     "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ": {
-        "alias": ["small", "0.6b", "default"],
+        "alias": ["small", "0.6b"],
         "embedding_dim": 1024,
         "description": "Small 0.6B parameter model, fast and efficient",
     },
     "mlx-community/Qwen3-Embedding-4B-4bit-DWQ": {
-        "alias": ["medium", "4b"],
+        "alias": ["medium", "4b", "default"],
         "embedding_dim": 2560,
         "description": "Medium 4B parameter model, balanced performance",
     },
