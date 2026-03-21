@@ -58,7 +58,7 @@ class InferenceProfiler:
         self.metrics.inference_tokens.labels(
             model=self.model,
             endpoint=self.endpoint,
-        ).add(token_count)
+        ).inc(amount=token_count)
 
     def record_cache_hit(self):
         """Record cache hit."""
