@@ -1,8 +1,8 @@
 # Qwen3 Embeddings Server for Mac
 
-**OpenAI-compatible text embeddings on your Mac.** Drop-in replacement for OpenAI embeddings API. Works with LiteLLM, LangChain, and more. 🚀
+**OpenAI/Cohere-compatible embeddings & reranking on your Mac.** Drop-in replacement for OpenAI embeddings and Cohere rerank APIs. Works with LiteLLM, LangChain, and more. 🚀
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![0.6B Speed](https://img.shields.io/badge/0.6B-44K_tokens/sec-green)
 ![4B Speed](https://img.shields.io/badge/4B-18K_tokens/sec-blue)
 ![8B Speed](https://img.shields.io/badge/8B-11K_tokens/sec-purple)
@@ -10,11 +10,13 @@
 
 ## ✨ Features
 
-- **OpenAI-Compatible API** - Drop-in replacement for `text-embedding-3-*` models
+- **OpenAI-Compatible Embeddings** - Drop-in replacement for `text-embedding-3-*` models
+- **Cohere-Compatible Reranking** - `/v1/rerank` endpoint for document reranking
 - **LiteLLM Integration** - Works seamlessly with LiteLLM proxy
-- **3 Model Sizes** - Small (0.6B), Medium (4B), Large (8B)
+- **3 Embedding Sizes** - Small (0.6B), Medium (4B), Large (8B)
+- **2 Reranker Sizes** - Small (0.6B), Large (4B)
 - **Dimension Truncation** - Reduce embedding size on the fly
-- **OpenTelemetry Metrics** - Built-in observability support
+- **OpenTelemetry Metrics** - Built-in OTLP observability
 - **Apple Silicon Optimized** - Leverages MLX framework for M1/M2/M3/M4 chips
 
 ## 🏃 Quick Start
@@ -22,7 +24,8 @@
 ### Requirements
 
 - Apple Silicon Mac (M1/M2/M3/M4)
-- Python 3.9+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) package manager
 - 1-5GB free space (depending on model)
 
 ### Install & Run
@@ -32,11 +35,11 @@
 git clone https://github.com/lucndm/qwen3-embeddings-mlx.git
 cd qwen3-embeddings-mlx
 
-# Install
-pip install -r requirements.txt
+# Install with uv
+uv sync
 
 # Run
-python server.py
+uv run python server.py
 ```
 
 Server runs at `http://localhost:8000`
@@ -44,14 +47,29 @@ Server runs at `http://localhost:8000`
 ### Test
 
 ```bash
+# Embeddings
 curl -X POST http://localhost:8000/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"input": "Hello world", "model": "text-embedding-3-small"}'
+
+# Rerank
+curl -X POST http://localhost:8000/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "small",
+    "query": "What is machine learning?",
+    "documents": ["ML is AI", "Weather is nice", "Neural networks"],
+    "top_n": 2
+  }'
 ```
 
-## 🔌 LiteLLM Integration
+## 🔌 LiteLLM Integration (M4 Mac Use Case)
 
-This server is fully compatible with LiteLLM. Add to your `litellm_config.yaml`:
+This server is designed to run locally on M4 Macs with LiteLLM proxy for RAG pipelines.
+
+### Embeddings Config
+
+Add to your `litellm_config.yaml`:
 
 ```yaml
 model_list:
@@ -74,15 +92,54 @@ model_list:
       api_key: dummy
 ```
 
-Then use with any LiteLLM-compatible client:
+### Rerank via Direct API
+
+LiteLLM doesn't natively support rerank, so call directly:
+
+```python
+import requests
+
+# Rerank documents for RAG
+response = requests.post(
+    "http://localhost:8000/v1/rerank",
+    json={
+        "model": "small",  # or "large" for 4B model
+        "query": "What is the revenue?",
+        "documents": retrieved_chunks,
+        "top_n": 5
+    }
+)
+
+ranked_results = response.json()["results"]
+# Use top results for LLM context
+```
+
+### Full RAG Pipeline Example
 
 ```python
 from litellm import embedding
+import requests
 
-response = embedding(
-    model="text-embedding-3-small",
-    input=["Hello world", "Test embedding"],
+# 1. Embed query
+query = "What is machine learning?"
+emb = embedding(model="text-embedding-3-small", input=[query])
+
+# 2. Vector search (your vector DB here)
+# candidates = vector_db.search(emb.data[0]["embedding"], top_k=20)
+
+# 3. Rerank candidates
+rerank_resp = requests.post(
+    "http://localhost:8000/v1/rerank",
+    json={
+        "model": "small",
+        "query": query,
+        "documents": [c["text"] for c in candidates],
+        "top_n": 5
+    }
 )
+
+# 4. Use top-ranked docs for LLM
+top_docs = [candidates[r["index"]] for r in rerank_resp.json()["results"]]
 ```
 
 ## 📖 API Reference
@@ -122,7 +179,37 @@ OpenAI-compatible embeddings endpoint.
 }
 ```
 
+### POST /v1/rerank
+
+Cohere-compatible rerank endpoint. Takes a query and documents, returns sorted by relevance.
+
+**Request:**
+
+```json
+{
+  "model": "small",
+  "query": "What is machine learning?",
+  "documents": ["Doc 1 text", "Doc 2 text", "Doc 3 text"],
+  "top_n": 2,
+  "max_tokens_per_doc": 4096
+}
+```
+
+**Response:**
+
+```json
+{
+  "results": [
+    {"index": 0, "relevance_score": 0.95},
+    {"index": 2, "relevance_score": 0.72}
+  ],
+  "id": "uuid-request-id"
+}
+```
+
 ### Model Mapping
+
+**Embeddings:**
 
 | OpenAI Model | Qwen Model | Dimensions | Speed |
 |--------------|------------|------------|-------|
@@ -131,14 +218,21 @@ OpenAI-compatible embeddings endpoint.
 | `text-embedding-3-large` | Qwen3 8B | 4096 | ⚡ 11K tok/s |
 | `text-embedding-ada-002` | Qwen3 0.6B | 1024 | ⚡⚡⚡ |
 
-You can also use Qwen names directly: `small`, `medium`, `large`
+**Rerank:**
+
+| Alias | Full Model | Size |
+|-------|------------|------|
+| `small`, `0.6b`, `default` | Qwen3-Reranker-0.6B | ~900MB |
+| `large`, `4b` | Qwen3-Reranker-4B | ~2.5GB |
+| `rerank-v3.5`, `rerank-v4.0` | → small | - |
+| `rerank-v4.0-pro` | → large | - |
 
 ### Other Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /health` | Health check |
-| `GET /models` | List available models |
+| `GET /models` | List available embedding models |
 | `GET /metrics` | Server metrics |
 | `GET /` | API info |
 
@@ -237,24 +331,22 @@ Built-in OTLP metrics support for observability:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `embedding_requests_total` | Counter | Total embedding requests |
+| `embedding_requests_total` | Counter | Total requests (embeddings + rerank) |
 | `embedding_latency_ms` | Histogram | Request latency (ms) |
 | `tokens_total` | Counter | Total tokens processed |
 | `embedding_errors_total` | Counter | Total errors |
+
+All metrics include `model` and `endpoint` (embeddings/rerank) attributes.
 
 **Configuration:**
 
 ```bash
 OTEL_SERVICE_NAME=qwen3-embedding-server \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
-python server.py
+uv run python server.py
 ```
 
-Install OTEL dependencies:
-
-```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
-```
+Works with any OTLP-compatible backend (Grafana, Datadog, Honeycomb, etc.).
 
 ## ⚙️ Configuration
 
@@ -283,13 +375,20 @@ make help         # Show all commands
 
 ## 📈 Performance
 
-Benchmarks from M2 Max (32GB):
+Benchmarks from M4 Mac:
 
 | Model | Throughput | Latency | Memory |
 |-------|------------|---------|--------|
 | 0.6B (small) | 44K tok/s | ~1.3ms | 900MB |
 | 4B (medium) | 18K tok/s | ~3-5ms | 2.5GB |
 | 8B (large) | 11K tok/s | ~8-12ms | 4.5GB |
+
+**Rerank:**
+
+| Model | Latency (per doc) | Memory |
+|-------|-------------------|--------|
+| 0.6B (small) | ~2ms | 900MB |
+| 4B (large) | ~5ms | 2.5GB |
 
 ## 🚀 Why Use This?
 
@@ -304,12 +403,15 @@ Benchmarks from M2 Max (32GB):
 ```
 qwen3-embeddings-mlx/
 ├── server.py              # Main FastAPI server
+├── pyproject.toml         # uv package config
 ├── models/
 │   ├── __init__.py
-│   └── openai_compat.py   # OpenAI-compatible Pydantic models
+│   ├── openai_compat.py   # OpenAI-compatible Pydantic models
+│   └── rerank_compat.py   # Cohere-compatible rerank models
 ├── utils/
 │   ├── __init__.py
-│   └── model_mapping.py   # OpenAI -> Qwen model mapping
+│   ├── model_mapping.py   # OpenAI -> Qwen model mapping
+│   └── rerank_utils.py    # Cohere -> Qwen rerank mapping
 ├── tests/
 │   ├── test_api.py        # API tests
 │   └── benchmark.py       # Performance benchmarks
