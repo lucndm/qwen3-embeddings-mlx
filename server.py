@@ -839,16 +839,29 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
         # Resolve model name (OpenAI -> Qwen)
         model_resolved = resolve_model(request.model)
 
-        # Generate embeddings using existing ModelManager
-        embeddings, model_used, embedding_dim = await model_manager.generate_embeddings(
-            texts, model_name=model_resolved, normalize=True
+        # Create profiler
+        profiler = InferenceProfiler(
+            metrics=prometheus_metrics,
+            model=model_resolved,
+            endpoint="embeddings",
         )
+
+        # Generate embeddings with profiling
+        with profiler.total():
+            (
+                embeddings,
+                model_used,
+                embedding_dim,
+            ) = await model_manager.generate_embeddings(
+                texts, model_name=model_resolved, normalize=True
+            )
 
         # Count tokens for usage info
         model_tuple = model_manager.models.get(model_used)
         if model_tuple:
             _, tokenizer = model_tuple
             total_tokens = count_tokens_batch(texts, tokenizer)
+            profiler.record_tokens(total_tokens)
         else:
             total_tokens = 0  # Fallback if model not in cache
 
@@ -936,13 +949,21 @@ async def rerank_documents(request: RerankRequest):
         # Resolve model name (Cohere -> Qwen)
         model_resolved = resolve_rerank_model(request.model)
 
-        # Compute relevance scores
-        scores = await rerank_model_manager.compute_scores(
-            query=request.query,
-            documents=request.documents,
-            model_name=model_resolved,
-            max_tokens=request.max_tokens_per_doc,
+        # Create profiler
+        profiler = InferenceProfiler(
+            metrics=prometheus_metrics,
+            model=model_resolved,
+            endpoint="rerank",
         )
+
+        # Compute relevance scores with profiling
+        with profiler.total():
+            scores = await rerank_model_manager.compute_scores(
+                query=request.query,
+                documents=request.documents,
+                model_name=model_resolved,
+                max_tokens=request.max_tokens_per_doc,
+            )
 
         # Create results with indices
         results_with_indices = [(i, score) for i, score in enumerate(scores)]
