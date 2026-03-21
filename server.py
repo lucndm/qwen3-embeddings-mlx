@@ -34,6 +34,9 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.resources import Resource
 
+# Monitoring imports
+from monitoring import PrometheusMetrics, SystemMetricsCollector, InferenceProfiler
+
 # OpenAI compatibility imports
 from models import (
     OpenAIEmbeddingRequest,
@@ -688,6 +691,14 @@ class RerankModelManager:
 model_manager = ModelManager(config)
 rerank_model_manager = RerankModelManager(config)
 
+# Initialize monitoring
+prometheus_metrics = PrometheusMetrics()
+system_collector = SystemMetricsCollector(
+    metrics=prometheus_metrics,
+    interval=float(os.getenv("METRICS_COLLECTION_INTERVAL", "2.0")),
+    gpu_enabled=os.getenv("GPU_METRICS_ENABLED", "true").lower() == "true",
+)
+
 
 # Legacy Pydantic models removed - now using OpenAI-compatible models from models/
 
@@ -712,6 +723,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"Configuration: {config}")
     logger.info(f"Available models: {list(AVAILABLE_MODELS.keys())}")
 
+    # Start system metrics collector
+    await system_collector.start()
+
     try:
         # Load default model at startup
         await model_manager.load_model(config.model_name)
@@ -725,6 +739,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down server...")
+    await system_collector.stop()
 
 
 # Create FastAPI application
@@ -1068,6 +1083,23 @@ async def get_metrics():
         },
         "version": app.version,
     }
+
+
+@app.get("/metrics/prometheus", tags=["Monitoring"])
+async def prometheus_metrics_endpoint():
+    """
+    Get Prometheus-format metrics.
+
+    Scrape this endpoint with Prometheus or compatible tools.
+    """
+    from fastapi import Response
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from monitoring.prometheus_metrics import REGISTRY
+
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/models", tags=["Models"])
