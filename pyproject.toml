@@ -1,0 +1,18 @@
+[project]
+name = "qwen3-embeddings-mlx"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.116.1",
+    "mlx-lm>=0.26.3",
+    "numpy>=2.3.2",
+    "opentelemetry-api>=1.40.0",
+    "opentelemetry-exporter-otlp>=1.40.0",
+    "opentelemetry-sdk>=1.40.0",
+    "psutil>=7.0.0",
+    "pydantic>=2.11.7",
+    "rich>=13.0.0",
+    "uvicorn[standard]>=0.35.0",
+]

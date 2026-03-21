@@ -6,6 +6,11 @@ from .openai_compat import (
     OpenAIError,
     OpenAIErrorResponse,
 )
+from .rerank_compat import (
+    RerankRequest,
+    RerankResponse,
+    RerankResult,
+)
 
 __all__ = [
     "OpenAIEmbeddingRequest",
@@ -14,4 +19,7 @@ __all__ = [
     "UsageInfo",
     "OpenAIError",
     "OpenAIErrorResponse",
+    "RerankRequest",
+    "RerankResponse",
+    "RerankResult",
 ]

@@ -42,12 +42,19 @@ from models import (
     UsageInfo,
     OpenAIError,
     OpenAIErrorResponse,
+    RerankRequest,
+    RerankResponse,
+    RerankResult,
 )
 from utils import (
     resolve_model,
     truncate_embedding,
     count_tokens_batch,
     encode_embedding_base64,
+    resolve_rerank_model,
+    get_rerank_model_full_name,
+    AVAILABLE_RERANK_MODELS,
+    RERANK_MODEL_ALIASES,
 )
 
 # Constants
@@ -469,8 +476,195 @@ class ModelManager:
         }
 
 
-# Initialize model manager
+class RerankModelManager:
+    """
+    Manages rerank model loading and inference.
+
+    Rerank models are cross-encoders that take (query, document) pairs
+    and output relevance scores. Different from embedding models.
+    """
+
+    def __init__(self, config: ServerConfig):
+        self.config = config
+        self.models: Dict[str, Tuple[Any, Any]] = {}  # model_name -> (model, tokenizer)
+        self.model_status: Dict[str, ModelStatus] = {}
+        self.model_load_times: Dict[str, float] = {}
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._global_lock = asyncio.Lock()
+        self.max_loaded_models = 1  # Rerank models are larger, keep fewer in memory
+
+    def _resolve_model_name(self, model_identifier: Optional[str] = None) -> str:
+        """Resolve model identifier to actual model name"""
+        if not model_identifier:
+            # Default to small reranker
+            return "samdotci/Qwen3-Reranker-0.6B-mlx-4Bit"
+
+        # Check alias
+        model_lower = model_identifier.lower()
+        if model_lower in RERANK_MODEL_ALIASES:
+            return RERANK_MODEL_ALIASES[model_lower]
+
+        # Check full name
+        if model_identifier in AVAILABLE_RERANK_MODELS:
+            return model_identifier
+
+        raise ValueError(
+            f"Unknown rerank model: {model_identifier}. "
+            f"Available: {list(AVAILABLE_RERANK_MODELS.keys())}"
+        )
+
+    async def load_model(self, model_name: Optional[str] = None) -> str:
+        """Load and initialize the specified rerank model"""
+        model_name = self._resolve_model_name(model_name)
+
+        if (
+            model_name in self.models
+            and self.model_status.get(model_name) == ModelStatus.READY
+        ):
+            return model_name
+
+        async with self._global_lock:
+            if model_name not in self._locks:
+                self._locks[model_name] = asyncio.Lock()
+
+        async with self._locks[model_name]:
+            if (
+                model_name in self.models
+                and self.model_status.get(model_name) == ModelStatus.READY
+            ):
+                return model_name
+
+            self.model_status[model_name] = ModelStatus.LOADING
+            logger.info(f"Loading rerank model: {model_name}")
+            start_time = time.time()
+
+            try:
+                # Evict old models if needed
+                if len(self.models) >= self.max_loaded_models:
+                    models_to_evict = [m for m in self.models.keys() if m != model_name]
+                    if models_to_evict:
+                        evict_model = models_to_evict[0]
+                        logger.info(f"Evicting rerank model {evict_model}")
+                        del self.models[evict_model]
+                        self.model_status[evict_model] = ModelStatus.UNLOADED
+
+                # Load model
+                model, tokenizer = load(model_name)
+                self.models[model_name] = (model, tokenizer)
+
+                # Warmup
+                await self._warmup(model_name)
+
+                self.model_load_times[model_name] = time.time() - start_time
+                self.model_status[model_name] = ModelStatus.READY
+                logger.info(
+                    f"Rerank model {model_name} loaded in {self.model_load_times[model_name]:.2f}s"
+                )
+
+                return model_name
+
+            except Exception as e:
+                self.model_status[model_name] = ModelStatus.ERROR
+                logger.error(
+                    f"Failed to load rerank model {model_name}: {e}", exc_info=True
+                )
+                raise RuntimeError(f"Rerank model loading failed: {e}") from e
+
+    async def _warmup(self, model_name: str) -> None:
+        """Warmup rerank model"""
+        try:
+            model, tokenizer = self.models[model_name]
+            # Simple warmup with query-doc pair
+            query = "test query"
+            doc = "test document"
+            tokens = tokenizer.encode(f"Query: {query} Document: {doc}")
+            input_ids = mx.array([tokens])
+            # Forward pass
+            _ = model(input_ids)
+            mx.eval(_)
+        except Exception as e:
+            logger.warning(f"Rerank warmup failed (non-critical): {e}")
+
+    async def compute_scores(
+        self,
+        query: str,
+        documents: List[str],
+        model_name: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> List[float]:
+        """
+        Compute relevance scores for query-document pairs.
+
+        Args:
+            query: The search query
+            documents: List of documents to score
+            model_name: Model to use
+            max_tokens: Max tokens per document
+
+        Returns:
+            List of relevance scores (higher = more relevant)
+        """
+        model_name = await self.load_model(model_name)
+
+        if self.model_status.get(model_name) != ModelStatus.READY:
+            raise RuntimeError(f"Rerank model {model_name} not ready")
+
+        model, tokenizer = self.models[model_name]
+        scores = []
+
+        for doc in documents:
+            # Format as query-document pair for cross-encoder
+            text = f"Query: {query} Document: {doc}"
+            tokens = tokenizer.encode(text)
+
+            # Truncate if needed
+            if len(tokens) > max_tokens:
+                tokens = tokens[:max_tokens]
+
+            input_ids = mx.array([tokens])
+
+            # Forward pass - get logits
+            logits = model(input_ids)
+
+            # For rerankers, we typically use the first token's logits
+            # or apply a scoring head. Qwen rerankers output a score.
+            # Get the score (usually from last token or special token)
+            mx.eval(logits)
+
+            # Convert to score - sigmoid for probability-like score
+            # Different models may need different extraction
+            if hasattr(model, "score"):
+                score = float(model.score(logits).tolist()[0])
+            else:
+                # Fallback: use last token logits, apply sigmoid
+                last_logits = logits[0, -1, :]
+                # Take mean or specific position for score
+                score = float(mx.sigmoid(last_logits.mean()).tolist())
+
+            scores.append(score)
+
+        return scores
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get rerank models status"""
+        models_status = {}
+        for name in AVAILABLE_RERANK_MODELS:
+            models_status[name] = {
+                "status": self.model_status.get(name, ModelStatus.UNLOADED).value,
+                "load_time": self.model_load_times.get(name),
+                "aliases": AVAILABLE_RERANK_MODELS[name]["alias"],
+                "description": AVAILABLE_RERANK_MODELS[name]["description"],
+            }
+
+        return {
+            "loaded_models": list(self.models.keys()),
+            "models": models_status,
+        }
+
+
+# Initialize model managers
 model_manager = ModelManager(config)
+rerank_model_manager = RerankModelManager(config)
 
 
 # Legacy Pydantic models removed - now using OpenAI-compatible models from models/
@@ -573,8 +767,10 @@ async def root():
         "version": app.version,
         "default_model": config.model_name,
         "available_models": list(AVAILABLE_MODELS.keys()),
+        "rerank_models": list(AVAILABLE_RERANK_MODELS.keys()),
         "endpoints": {
             "embeddings": "/v1/embeddings",
+            "rerank": "/v1/rerank",
             "health": "/health",
             "metrics": "/metrics",
             "models": "/models",
@@ -678,6 +874,101 @@ async def create_embeddings(request: OpenAIEmbeddingRequest):
                     type="server_error",
                 )
             ).model_dump(),
+        )
+
+
+@app.post(
+    "/v1/rerank",
+    response_model=RerankResponse,
+    tags=["Rerank"],
+    status_code=status.HTTP_200_OK,
+)
+async def rerank_documents(request: RerankRequest):
+    """
+    Rerank documents by relevance to a query.
+
+    Cohere-compatible rerank endpoint. Takes a query and list of documents,
+    returns documents sorted by relevance score.
+
+    Supports model aliases: "small" (0.6B), "large" (4B), or full model names.
+    Also supports Cohere model names like "rerank-v3.5" -> "small".
+    """
+    try:
+        start_time = time.time()
+
+        # Resolve model name (Cohere -> Qwen)
+        model_resolved = resolve_rerank_model(request.model)
+
+        # Compute relevance scores
+        scores = await rerank_model_manager.compute_scores(
+            query=request.query,
+            documents=request.documents,
+            model_name=model_resolved,
+            max_tokens=request.max_tokens_per_doc,
+        )
+
+        # Create results with indices
+        results_with_indices = [(i, score) for i, score in enumerate(scores)]
+
+        # Sort by score descending
+        results_with_indices.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply top_n limit if specified
+        if request.top_n is not None:
+            results_with_indices = results_with_indices[: request.top_n]
+
+        # Build response
+        results = [
+            RerankResult(index=idx, relevance_score=score)
+            for idx, score in results_with_indices
+        ]
+
+        processing_time = (time.time() - start_time) * 1000
+        logger.info(
+            f"Reranked {len(request.documents)} documents in {processing_time:.2f}ms"
+        )
+
+        # Record metrics
+        if embedding_counter:  # Reuse counter for rerank
+            embedding_counter.add(1, {"model": request.model, "endpoint": "rerank"})
+        if embedding_latency:
+            embedding_latency.record(
+                processing_time, {"model": request.model, "endpoint": "rerank"}
+            )
+
+        return RerankResponse(results=results)
+
+    except ValueError as e:
+        logger.error(f"Rerank validation error: {e}")
+        if error_counter:
+            error_counter.add(
+                1,
+                {
+                    "model": request.model,
+                    "error_type": "validation",
+                    "endpoint": "rerank",
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"message": str(e), "type": "invalid_request_error"}},
+        )
+    except Exception as e:
+        logger.error(f"Rerank failed: {e}", exc_info=True)
+        if error_counter:
+            error_counter.add(
+                1,
+                {
+                    "model": request.model,
+                    "error_type": "server_error",
+                    "endpoint": "rerank",
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {"message": f"Rerank failed: {str(e)}", "type": "server_error"}
+            },
         )
 
 
