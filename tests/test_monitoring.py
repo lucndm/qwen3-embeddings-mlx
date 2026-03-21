@@ -583,29 +583,24 @@ class TestPrometheusEndpoint:
     def test_metrics_after_recording(self):
         """Test that metrics are properly formatted after recording."""
         # Use fresh registry for isolated test
-        from prometheus_client import CollectorRegistry
+        from prometheus_client import CollectorRegistry, generate_latest
 
         fresh_reg = CollectorRegistry()
-        with patch("monitoring.prometheus_metrics.REGISTRY", fresh_reg):
-            metrics = PrometheusMetrics()
-            profiler = InferenceProfiler(metrics, "test-model", "embeddings")
+        metrics = PrometheusMetrics(registry=fresh_reg)
+        profiler = InferenceProfiler(metrics, "test-model", "embeddings")
 
-            # Record some data
-            profiler.record_tokens(100)
-            profiler.record_cache_hit()
-            profiler.update_cache_size(42)
+        # Record some data
+        profiler.record_tokens(100)
+        profiler.record_cache_hit()
+        profiler.update_cache_size(42)
 
-            # Get handler response
-            handler = get_metrics_handler()
-            response = handler()
+        # Get metrics directly from fresh registry
+        content = generate_latest(fresh_reg).decode("utf-8")
 
-            # Check content
-            content = response.body.decode("utf-8")
-
-            # Verify recorded values are in output
-            assert "qwen3_inference_tokens" in content
-            assert "qwen3_cache_hits" in content
-            assert "qwen3_cache_size" in content
+        # Verify recorded values are in output
+        assert "qwen3_inference_tokens" in content
+        assert "qwen3_cache_hits" in content
+        assert "qwen3_cache_size" in content
 
 
 class TestIntegration:
@@ -615,41 +610,38 @@ class TestIntegration:
     async def test_end_to_end_metrics_flow(self):
         """Test complete metrics flow from recording to export."""
         # Use fresh registry for isolated test
-        from prometheus_client import CollectorRegistry
+        from prometheus_client import CollectorRegistry, generate_latest
 
         fresh_reg = CollectorRegistry()
-        with patch("monitoring.prometheus_metrics.REGISTRY", fresh_reg):
-            metrics = PrometheusMetrics()
-            collector = SystemMetricsCollector(metrics, interval=0.1, gpu_enabled=False)
-            profiler = InferenceProfiler(metrics, "small", "embeddings")
+        metrics = PrometheusMetrics(registry=fresh_reg)
+        collector = SystemMetricsCollector(metrics, interval=0.1, gpu_enabled=False)
+        profiler = InferenceProfiler(metrics, "small", "embeddings")
 
-            # Start collector
-            await collector.start()
+        # Start collector
+        await collector.start()
 
-            # Simulate inference
-            with profiler.stage("tokenization"):
-                time.sleep(0.005)
+        # Simulate inference
+        with profiler.stage("tokenization"):
+            time.sleep(0.005)
 
-            with profiler.total():
-                profiler.record_tokens(50)
-                profiler.record_cache_hit()
-                profiler.update_cache_size(10)
-                time.sleep(0.005)
+        with profiler.total():
+            profiler.record_tokens(50)
+            profiler.record_cache_hit()
+            profiler.update_cache_size(10)
+            time.sleep(0.005)
 
-            # Stop collector
-            await collector.stop()
+        # Stop collector
+        await collector.stop()
 
-            # Get metrics
-            handler = get_metrics_handler()
-            response = handler()
-            content = response.body.decode("utf-8")
+        # Get metrics directly from fresh registry
+        content = generate_latest(fresh_reg).decode("utf-8")
 
-            # Verify all expected metrics present
-            assert "qwen3_inference_duration_seconds" in content
-            assert "qwen3_request_duration_seconds" in content
-            assert "qwen3_inference_tokens" in content
-            assert "qwen3_cache_hits" in content
-            assert "qwen3_cpu_percent" in content
+        # Verify all expected metrics present
+        assert "qwen3_inference_duration_seconds" in content
+        assert "qwen3_request_duration_seconds" in content
+        assert "qwen3_inference_tokens" in content
+        assert "qwen3_cache_hits" in content
+        assert "qwen3_cpu_percent" in content
 
     @pytest.mark.asyncio
     async def test_multiple_concurrent_profilers(self):
@@ -658,33 +650,32 @@ class TestIntegration:
         from prometheus_client import CollectorRegistry
 
         fresh_reg = CollectorRegistry()
-        with patch("monitoring.prometheus_metrics.REGISTRY", fresh_reg):
-            metrics = PrometheusMetrics()
+        metrics = PrometheusMetrics(registry=fresh_reg)
 
-            async def simulate_request(model: str):
-                profiler = InferenceProfiler(metrics, model, "embeddings")
-                with profiler.total():
-                    with profiler.stage("inference"):
-                        time.sleep(0.01)
-                    profiler.record_tokens(25)
+        async def simulate_request(model: str):
+            profiler = InferenceProfiler(metrics, model, "embeddings")
+            with profiler.total():
+                with profiler.stage("inference"):
+                    time.sleep(0.01)
+                profiler.record_tokens(25)
 
-            # Run multiple concurrent requests
-            tasks = [
-                simulate_request("small"),
-                simulate_request("medium"),
-                simulate_request("large"),
-            ]
+        # Run multiple concurrent requests
+        tasks = [
+            simulate_request("small"),
+            simulate_request("medium"),
+            simulate_request("large"),
+        ]
 
-            await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
 
-            # Verify metrics for all models
-            request_samples = metrics.requests_total.collect()[0].samples
-            model_labels = {s.labels.get("model") for s in request_samples}
+        # Verify metrics for all models
+        request_samples = metrics.requests_total.collect()[0].samples
+        model_labels = {s.labels.get("model") for s in request_samples}
 
-            assert "small" in model_labels
-            assert "medium" in model_labels
-            assert "large" in model_labels
+        assert "small" in model_labels
+        assert "medium" in model_labels
+        assert "large" in model_labels
 
-            # Verify token counts were recorded
-            token_samples = metrics.inference_tokens.collect()[0].samples
-            assert len(token_samples) >= 3  # At least 3 models
+        # Verify token counts were recorded
+        token_samples = metrics.inference_tokens.collect()[0].samples
+        assert len(token_samples) >= 3  # At least 3 models
