@@ -574,16 +574,36 @@ class RerankModelManager:
         """Warmup rerank model"""
         try:
             model, tokenizer = self.models[model_name]
-            # Simple warmup with query-doc pair
-            query = "test query"
-            doc = "test document"
-            tokens = tokenizer.encode(f"Query: {query} Document: {doc}")
+            # Use correct Qwen3-Reranker prompt format
+            prompt = self._format_rerank_prompt("test query", "test document")
+            tokens = tokenizer.encode(prompt)
             input_ids = mx.array([tokens])
             # Forward pass
-            _ = model(input_ids)
-            mx.eval(_)
+            logits = model(input_ids)
+            mx.eval(logits)
         except Exception as e:
             logger.warning(f"Rerank warmup failed (non-critical): {e}")
+
+    def _format_rerank_prompt(
+        self,
+        query: str,
+        document: str,
+        instruction: str = "Given a web search query, retrieve relevant passages that answer the query.",
+    ) -> str:
+        """Format query-document pair using Qwen3-Reranker prompt template"""
+        prompt = (
+            f"<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. "
+            f'Note that the answer can only be "yes" or "no".<|im_end|>\n'
+            f"<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+        return prompt
+
+    def _get_yes_no_token_ids(self, tokenizer) -> tuple:
+        """Get yes/no token IDs for scoring"""
+        yes_id = tokenizer.convert_tokens_to_ids("yes")
+        no_id = tokenizer.convert_tokens_to_ids("no")
+        return no_id, yes_id
 
     async def compute_scores(
         self,
@@ -610,12 +630,16 @@ class RerankModelManager:
             raise RuntimeError(f"Rerank model {model_name} not ready")
 
         model, tokenizer = self.models[model_name]
+
+        # Get yes/no token IDs for scoring
+        no_id, yes_id = self._get_yes_no_token_ids(tokenizer)
+
         scores = []
 
         for doc in documents:
-            # Format as query-document pair for cross-encoder
-            text = f"Query: {query} Document: {doc}"
-            tokens = tokenizer.encode(text)
+            # Format using Qwen3-Reranker prompt template
+            prompt = self._format_rerank_prompt(query, doc)
+            tokens = tokenizer.encode(prompt)
 
             # Truncate if needed
             if len(tokens) > max_tokens:
@@ -625,21 +649,19 @@ class RerankModelManager:
 
             # Forward pass - get logits
             logits = model(input_ids)
-
-            # For rerankers, we typically use the first token's logits
-            # or apply a scoring head. Qwen rerankers output a score.
-            # Get the score (usually from last token or special token)
             mx.eval(logits)
 
-            # Convert to score - sigmoid for probability-like score
-            # Different models may need different extraction
-            if hasattr(model, "score"):
-                score = float(model.score(logits).tolist()[0])
-            else:
-                # Fallback: use last token logits, apply sigmoid
-                last_logits = logits[0, -1, :]
-                # Take mean or specific position for score
-                score = float(mx.sigmoid(last_logits.mean()).tolist())
+            # Extract score from yes/no token logits (last token position)
+            last_logits = logits[0, -1, :]
+
+            # Get logits for no and yes tokens
+            relevant_logits = mx.array([last_logits[no_id], last_logits[yes_id]])
+
+            # Softmax to get probabilities
+            probs = mx.softmax(relevant_logits)
+
+            # Score = probability of "yes"
+            score = float(probs[1].tolist())
 
             scores.append(score)
 
