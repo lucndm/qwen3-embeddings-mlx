@@ -234,6 +234,7 @@ Cohere-compatible rerank endpoint. Takes a query and documents, returns sorted b
 | `GET /health` | Health check |
 | `GET /models` | List available embedding models |
 | `GET /metrics` | Server metrics |
+| `GET /metrics/prometheus` | Prometheus-format metrics |
 | `GET /` | API info |
 
 ## 💻 Usage Examples
@@ -348,6 +349,64 @@ uv run python server.py
 
 Works with any OTLP-compatible backend (Grafana, Datadog, Honeycomb, etc.).
 
+### CPU/GPU Monitoring (Prometheus)
+
+Built-in Prometheus metrics for monitoring CPU/GPU utilization and system health on Apple Silicon.
+
+**Quick Setup:**
+
+```bash
+# Install dependencies and setup monitoring
+./scripts/setup-gpu-metrics.sh
+
+# Start server with metrics enabled
+ENABLE_PROMETHEUS_METRICS=true uv run python server.py
+
+# Verify metrics endpoint
+curl http://localhost:8000/metrics/prometheus
+```
+
+**Available Metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `server_cpu_percent` | Gauge | CPU utilization percentage |
+| `server_memory_percent` | Gauge | Memory utilization percentage |
+| `server_memory_used_mb` | Gauge | Memory used in MB |
+| `server_memory_available_mb` | Gauge | Available memory in MB |
+| `gpu_utilization_percent` | Gauge | GPU utilization percentage |
+| `gpu_memory_used_mb` | Gauge | GPU memory used in MB |
+| `gpu_memory_total_mb` | Gauge | Total GPU memory in MB |
+| `gpu_memory_percent` | Gauge | GPU memory utilization percentage |
+| `gpu_temperature_celsius` | Gauge | GPU temperature in Celsius |
+| `gpu_power_watts` | Gauge | GPU power consumption in watts |
+| `up` | Gauge | Server health status (1=healthy) |
+| `uptime_seconds` | Gauge | Server uptime in seconds |
+
+**Prometheus Configuration:**
+
+```yaml
+# prometheus.yml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'qwen3-embeddings'
+    static_configs:
+      - targets: ['localhost:8000']
+        labels:
+          service: 'qwen3-embedding-server'
+```
+
+**Grafana Dashboard:**
+
+Import the provided Grafana dashboard for visualization:
+
+```bash
+# Import dashboard JSON from docs/monitoring/grafana-dashboard.json
+# Navigate to Grafana UI → Dashboards → Import → Upload JSON
+```
+
 ## ⚙️ Configuration
 
 Environment variables:
@@ -361,6 +420,9 @@ Environment variables:
 | `MAX_TEXT_LENGTH` | 8192 | Max tokens per text |
 | `LOG_LEVEL` | INFO | Logging level |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | - | OTLP collector endpoint |
+| `ENABLE_PROMETHEUS_METRICS` | true | Enable Prometheus endpoint |
+| `METRICS_COLLECTION_INTERVAL` | 2.0 | System metrics interval (seconds) |
+| `GPU_METRICS_ENABLED` | true | Enable GPU metrics collection |
 
 ## 🛠️ Make Commands
 
